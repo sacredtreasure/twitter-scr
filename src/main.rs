@@ -1,35 +1,15 @@
-use chrono::{DateTime, Duration, NaiveDateTime, Utc};
-use error_chain::error_chain;
-use reqwest;
+use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT};
+use std::collections::BinaryHeap;
+use std::time::Duration;
 use select::document::Document;
 use select::predicate::Name;
-use std::cmp::Ordering;
-use std::collections::BinaryHeap;
+use chrono::NaiveDateTime;
+use error_chain::error_chain;
 
 #[derive(Debug)]
 struct TwitterPost {
     text: String,
     timestamp: NaiveDateTime,
-}
-
-impl Ord for TwitterPost {
-    fn cmp(&self, other: &Self) -> Ordering {
-        other.timestamp.cmp(&self.timestamp)
-    }
-}
-
-impl PartialOrd for TwitterPost {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Eq for TwitterPost {}
-
-impl PartialEq for TwitterPost {
-    fn eq(&self, other: &Self) -> bool {
-        self.timestamp == other.timestamp
-    }
 }
 
 error_chain! {
@@ -42,7 +22,18 @@ error_chain! {
 async fn main() -> Result<()> {
     let hashtag = "$KAVA"; // Replace with the desired hashtag
 
-    let res = reqwest::get(&format!("https://twitter.com/hashtag/{}?src=hash", hashtag))
+    let mut headers = HeaderMap::new();
+    headers.insert(USER_AGENT, HeaderValue::from_static("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36"));
+
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .danger_accept_invalid_certs(true)
+        .connect_timeout(Duration::from_secs(30))
+        .build()?;
+
+    let res = client
+        .get(&format!("https://twitter.com/hashtag/{}?src=hash", hashtag))
+        .send()
         .await?
         .text()
         .await?;
@@ -71,19 +62,13 @@ async fn main() -> Result<()> {
                     .next()
                 {
                     let timestamp_utc = NaiveDateTime::from_timestamp(timestamp, 0);
-                    post_heap.push(TwitterPost {
-                        text,
-                        timestamp: timestamp_utc,
-                    });
+                    post_heap.push(TwitterPost { text, timestamp: timestamp_utc });
                 }
             }
         });
 
-    let current_datetime = Utc::now();
-
     while let Some(post) = post_heap.pop() {
-        let timestamp_utc: DateTime<Utc> = DateTime::from_utc(post.timestamp, Utc);
-        let age = current_datetime.signed_duration_since(timestamp_utc);
+        let age = Utc::now().signed_duration_since(post.timestamp);
         println!("Age: {:?}, Tweet: {}", age, post.text);
     }
 
