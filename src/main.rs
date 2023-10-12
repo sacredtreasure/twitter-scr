@@ -1,41 +1,65 @@
-use chrono::{Duration, Utc};
-use twapi::{TwitterAPI, TweetSearchQuery, TweetSort};
+use serde::Deserialize;
+use reqwest;
+use serde_json::Value;
+
+#[derive(Deserialize)]
+struct YouTubeVideo {
+    items: Vec<YouTubeVideoItem>,
+}
+
+#[derive(Deserialize)]
+struct YouTubeVideoItem {
+    id: Value,
+    snippet: Value,
+}
 
 #[tokio::main]
-async fn main() -> Result<(), twapi::Error> {
-    // Initialize the TwitterAPI client using your API keys and access tokens
-    let api = TwitterAPI::new_from_env();
+async fn main() -> Result<(), reqwest::Error> {
+    // Set your YouTube Data API key
+    let api_key = "YOUR_YOUTUBE_API_KEY";
 
-    // Replace with your desired hashtag
-    let hashtag = "KAVA";
+    // Set the hashtag you want to search for
+    let hashtag = "YOUR_HASHTAG";
 
-    // Construct a search query for tweets with the hashtag and sort by newest
-    let query = TweetSearchQuery::new()
-        .query(format!("hashtag:{} -filter:retweets", hashtag))
-        .sort(TweetSort::Newest);
+    // Create a search query to search for videos with the hashtag
+    let search_query = format!("{} video", hashtag);
 
-    // Fetch tweets matching the query
-    let tweets = api.search_tweets(&query).await?;
+    // Construct the YouTube API URL
+    let url = format!(
+        "https://www.googleapis.com/youtube/v3/search?key={}&q={}&part=snippet&type=video",
+        api_key, search_query
+    );
 
-    // Get the current time
-    let current_time = Utc::now();
+    // Send a GET request to the YouTube Data API
+    let response = reqwest::get(&url).await?;
 
-    // Create a vector to store tweets with calculated ages
-    let mut tweets_with_age: Vec<(String, Duration)> = vec![];
-
-    // Calculate the age for each tweet
-    for tweet in tweets {
-        let created_at = tweet.created_at.with_timezone(&Utc);
-        let age = current_time.signed_duration_since(created_at);
-        tweets_with_age.push((tweet.full_text, age));
+    if !response.status().is_success() {
+        return Err(reqwest::Error::new(
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Internal Server Error: {}", response.status()),
+        ));
     }
 
-    // Sort the tweets by age (oldest first)
-    tweets_with_age.sort_by(|(_, age1), (_, age2)| age1.cmp(age2));
+    // Parse the JSON response
+    let response_text = response.text().await?;
+    let parsed_response: Result<Value, serde_json::Error> = serde_json::from_str(&response_text)?;
 
-    // Print the sorted tweets with their ages
-    for (text, age) in tweets_with_age {
-        println!("Age: {:?}, Tweet: {}", age, text);
+    // Process and print the video data
+    if let Some(items) = parsed_response.get("items") {
+        for item in items.as_array().unwrap() {
+            if let Some(snippet) = item.get("snippet") {
+                if let Some(title) = snippet.get("title") {
+                    println!("Video Title: {}", title);
+                }
+                if let Some(description) = snippet.get("description") {
+                    println!("Video Description: {}", description);
+                }
+            }
+            if let Some(id) = item.get("id") {
+                println!("Video ID: {:?}", id);
+            }
+            println!("------------------------");
+        }
     }
 
     Ok(())
