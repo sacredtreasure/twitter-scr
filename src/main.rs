@@ -1,75 +1,41 @@
-use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT};
-use std::collections::BinaryHeap;
-use std::time::Duration;
-use select::document::Document;
-use select::predicate::Name;
-use chrono::NaiveDateTime;
-use error_chain::error_chain;
-
-#[derive(Debug)]
-struct TwitterPost {
-    text: String,
-    timestamp: NaiveDateTime,
-}
-
-error_chain! {
-    foreign_links {
-        ReqError(reqwest::Error);
-    }
-}
+use chrono::{Duration, Utc};
+use twapi::{TwitterAPI, TweetSearchQuery, TweetSort};
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    let hashtag = "$KAVA"; // Replace with the desired hashtag
+async fn main() -> Result<(), twapi::Error> {
+    // Initialize the TwitterAPI client using your API keys and access tokens
+    let api = TwitterAPI::new_from_env();
 
-    let mut headers = HeaderMap::new();
-    headers.insert(USER_AGENT, HeaderValue::from_static("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36"));
+    // Replace with your desired hashtag
+    let hashtag = "KAVA";
 
-    let client = reqwest::Client::builder()
-        .default_headers(headers)
-        .danger_accept_invalid_certs(true)
-        .connect_timeout(Duration::from_secs(30))
-        .build()?;
+    // Construct a search query for tweets with the hashtag and sort by newest
+    let query = TweetSearchQuery::new()
+        .query(format!("hashtag:{} -filter:retweets", hashtag))
+        .sort(TweetSort::Newest);
 
-    let res = client
-        .get(&format!("https://twitter.com/hashtag/{}?src=hash", hashtag))
-        .send()
-        .await?
-        .text()
-        .await?;
+    // Fetch tweets matching the query
+    let tweets = api.search_tweets(&query).await?;
 
-    let mut post_heap: BinaryHeap<TwitterPost> = BinaryHeap::new();
+    // Get the current time
+    let current_time = Utc::now();
 
-    Document::from(res.as_str())
-        .find(Name("li"))
-        .filter(|node| {
-            node.attr("data-item-type") == Some("tweet") && node.attr("data-name") == Some("tweet")
-        })
-        .for_each(|tweet| {
-            if let Some(text) = tweet
-                .find(Name("p"))
-                .filter_map(|p| Some(p.text().trim().to_string()))
-                .next()
-            {
-                if let Some(timestamp) = tweet
-                    .find(Name("span"))
-                    .filter_map(|n| {
-                        if n.attr("data-time") == None {
-                            return None;
-                        }
-                        Some(n.attr("data-time").unwrap().parse::<i64>().unwrap())
-                    })
-                    .next()
-                {
-                    let timestamp_utc = NaiveDateTime::from_timestamp(timestamp, 0);
-                    post_heap.push(TwitterPost { text, timestamp: timestamp_utc });
-                }
-            }
-        });
+    // Create a vector to store tweets with calculated ages
+    let mut tweets_with_age: Vec<(String, Duration)> = vec![];
 
-    while let Some(post) = post_heap.pop() {
-        let age = Utc::now().signed_duration_since(post.timestamp);
-        println!("Age: {:?}, Tweet: {}", age, post.text);
+    // Calculate the age for each tweet
+    for tweet in tweets {
+        let created_at = tweet.created_at.with_timezone(&Utc);
+        let age = current_time.signed_duration_since(created_at);
+        tweets_with_age.push((tweet.full_text, age));
+    }
+
+    // Sort the tweets by age (oldest first)
+    tweets_with_age.sort_by(|(_, age1), (_, age2)| age1.cmp(age2));
+
+    // Print the sorted tweets with their ages
+    for (text, age) in tweets_with_age {
+        println!("Age: {:?}, Tweet: {}", age, text);
     }
 
     Ok(())
